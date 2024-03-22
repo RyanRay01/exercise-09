@@ -1,0 +1,196 @@
+---
+title: "exercise-09"
+output: html_document
+date: "2024-03-18"
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+### Load in Libraries
+```{r}
+library(tidyverse)
+library(skimr)
+library(broom)
+library(infer)
+```
+
+### Load in dataset
+```{r}
+f <- "https://raw.githubusercontent.com/difiore/ada-2024-datasets/main/Street_et_al_2017.csv"
+
+d <- read_csv(f)
+```
+
+### Generate 5 number summary, mean, and standard deviation of each
+### quantitative variable
+```{r}
+stats <- d %>% skim() %>% select(, c(skim_variable, numeric.mean, numeric.sd, numeric.p0, numeric.p25, numeric.p50, numeric.p75, numeric.p100)) %>% na.omit() %>% rename(, Variable = skim_variable, Mean = numeric.mean, Standard_Deviation = numeric.sd, Min = numeric.p0, Q1 = numeric.p25, Median = numeric.p50, Q3 = numeric.p75, Max = numeric.p100) %>% as.data.frame()
+
+stats
+```
+
+### Plot brain size (ECV) as a function of social group size (Group_size),
+### longevity (Longevity), juvenile period length (Weaning), and
+### reproductive lifespan (Repro_lifespan)
+```{r}
+ecvGS <- ggplot(d, aes(Group_size, ECV)) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE)
+
+ecvLong <- ggplot(d, aes(Longevity, ECV)) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE)
+
+ecvJPL <- ggplot(d, aes(Weaning, ECV)) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE)
+
+ecvRLS <- ggplot(d, aes(Repro_lifespan, ECV)) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE)
+
+
+ecvGS
+ecvLong
+ecvJPL
+ecvRLS
+```
+
+### Calculate the ordinary least squares regression coefficients B1 and 
+### B0 for ECV as a function of social group size.
+```{r}
+sGS <- select(d, c('Species', 'Taxonomic_group', 'ECV', 'Group_size')) %>% na.omit()
+
+x <- sGS$Group_size
+y <- sGS$ECV
+b1 <- cov(x, y)/var(x)
+
+b0 <- mean(y) - b1 * mean(x)
+
+b1
+b0
+```
+
+### Confirm B1 and B0 using lm()
+```{r}
+m <- lm(y ~ x, data = sGS)
+
+m
+```
+
+### Repeat analysis for Catarrhines, Platyrrhines, and Strepsirhines
+##### The slope coefficients differ slightly from each other, though there
+##### is a large difference between the intercepts. 
+```{r}
+# Catarrhinnes
+sC <- subset(sGS, Taxonomic_group == 'Catarrhini')
+
+xC <- sC$Group_size
+yC <- sC$ECV
+b1C <- cov(xC, yC)/var(xC)
+
+b0C <- mean(yC) - b1C * mean(xC)
+
+mC <- lm(yC ~ xC, data = sC)
+
+# Platyrrhines
+
+sP <- subset(sGS, Taxonomic_group == 'Platyrrhini')
+
+xP <- sP$Group_size
+yP <- sP$ECV
+b1P <- cov(xP, yP)/var(xP)
+
+b0P <- mean(yP) - b1P * mean(xP)
+
+mP <- lm(yP ~ xP, data = sP)
+
+# Strepsirhines
+
+sS <- subset(sGS, Taxonomic_group == 'Strepsirhini')
+
+xS <- sS$Group_size
+yS <- sS$ECV
+b1S <- cov(xS, yS)/var(xS)
+
+b0S <- mean(yS) - b1S * mean(xS)
+
+mS <- lm(yS ~ xS, data = sS)
+
+Taxonomic_Group <- c('Catarrhines', 'Platyrrhines', 'Strepsirhines','All')
+Slope_Coeff_B1 <- c(b1C, b1P, b1S, b1)
+Intercept_B0 <- c(b0C, b0P, b0S, b0)
+
+Tax_Stats <- data.frame(Taxonomic_Group, Slope_Coeff_B1, Intercept_B0)
+Tax_Stats
+```
+
+### Calculate standard error of the slope coefficient, the 95% confidence
+### confidence interval, and the p-value of coefficient
+```{r}
+### Standard error of slope coefficient
+
+n <- nrow(sGS)
+
+seB1 <- sqrt(((sum(y-mean(y)))^2)/((n-2)*(sum(x-mean(x)))^2))
+seB1
+
+### 95% CI
+alpha <- 1 - 95/100
+
+lower <- b1 - qt(1 - alpha/2, df = n - 2) * seB1
+upper <- b1 + qt(1 - alpha/2, df = n - 2) * seB1
+CI <- cbind(lower, upper)
+CI
+
+### p-value
+tstat <- (b1 - 0)/seB1
+pval <- 2 * pt(tstat, df = n - 2, lower.tail = FALSE)
+pval
+```
+
+### Generate a null sampling distribution for the slope coefficient from
+### 1000 permutations. Permutations consist of randomly shuffling the
+### response variable from the explanatory variable.
+```{r}
+perm <- sGS %>%
+  specify(ECV ~ Group_size) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type = "permute") %>%
+  calculate(stat = "slope")
+
+pvalPerm <- perm %>%
+  get_p_value(obs_stat = b1, direction="two_sided")
+
+pvalue <- perm %>% 
+  mutate(abs_stat=abs(stat)) %>%
+  summarize(
+    estimate = mean(abs_stat >= abs(b1))
+  )
+
+pvalPerm
+pvalue
+```
+
+### Generate a 95% CI of the slope coefficient estimate using
+### bootstrapping and both the percentile method and the theory-based
+### method
+##### The slope is significantly different from zero because the CI does
+##### not contain zero
+```{r}
+boot_slope_dist <- sGS %>%
+  specify(ECV ~ Group_size) %>%
+  generate(reps = 1000, type = "bootstrap") %>%
+  calculate(stat = "slope")
+
+slope_estimate <- mean(boot_slope_dist$stat)
+
+percentCI <- get_ci(boot_slope_dist, level = 1 - alpha, type = "percentile")
+theoryCI <- get_ci(boot_slope_dist, level = 1 - alpha, type = "se", point_estimate = slope_estimate)
+
+```
+
+
+
